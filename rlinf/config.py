@@ -807,6 +807,14 @@ def validate_embodied_cfg(cfg):
             f"Current value: {add_value_head}"
         )
 
+    if cfg.algorithm.loss_type == "opd_flow":
+        assert cfg.algorithm.adv_type == "opd", (
+            "opd_flow loss requires adv_type: opd"
+        )
+        assert OmegaConf.select(cfg, "algorithm.opd_beta") is not None, (
+            "algorithm.opd_beta is required when using loss_type: opd_flow"
+        )
+
     # process num-envs
     component_placement = HybridComponentPlacement(cfg, Cluster())
     stage_num = cfg.rollout.pipeline_stage_num

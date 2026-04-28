@@ -15,6 +15,7 @@
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 
 from rlinf.algorithms.registry import register_advantage
 from rlinf.algorithms.utils import kl_penalty, safe_normalize
@@ -349,4 +350,34 @@ def compute_raw_advantages(
         if valid.numel() > 0:
             advantages = (advantages - valid.mean()) / (valid.std() + 1e-5)
 
+    return advantages, None
+
+
+@register_advantage("opd")
+def compute_opd_advantages(
+    rewards: torch.Tensor,
+    loss_mask: torch.Tensor,
+    group_size: int,
+    opd_beta: float = 1.0,
+    **kwargs,
+) -> tuple[torch.Tensor, None]:
+    """Compute OPD (On-Policy Distillation) reward-weighted advantages.
+
+    Implements w_i = softmax(R_i / beta) within each group, corresponding to
+    the optimal policy pi*(a|s) ∝ pi_old(a|s) * exp(R/beta) from VLA-OPD.
+    Higher beta -> more uniform weights (closer to behavior cloning).
+    Lower beta -> winner-take-all (closer to greedy reward maximization).
+
+    Args:
+        rewards: Per-trajectory rewards. Shape: [num_groups * group_size].
+        loss_mask: Loss mask for valid entries. Shape: [seq_len, num_groups * group_size].
+        group_size: Number of trajectories per group for softmax normalization.
+        opd_beta: Softmax temperature controlling reward sensitivity.
+
+    Returns:
+        Tuple of (advantages, None). advantages shape: [seq_len, num_groups * group_size].
+    """
+    grouped_rewards = rewards.view(-1, group_size)           # [n_groups, group_size]
+    weights = F.softmax(grouped_rewards / opd_beta, dim=-1)  # [n_groups, group_size]
+    advantages = (torch.zeros_like(loss_mask) + weights.view(1, -1)) * loss_mask
     return advantages, None

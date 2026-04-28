@@ -431,6 +431,47 @@ def compute_ppo_actor_critic_loss(**kwargs) -> tuple[torch.Tensor, dict]:
     return loss, metrics_data
 
 
+@register_policy_loss("opd_flow")
+def compute_opd_flow_loss(
+    logprobs: torch.Tensor,
+    advantages: torch.Tensor,
+    loss_mask: Optional[torch.Tensor] = None,
+    **kwargs,
+) -> tuple[torch.Tensor, dict]:
+    """OPD loss for flow-based action heads.
+
+    Implements L = -E[w_i * log pi_theta(a_i|s_i)] where w_i = softmax(R_i/beta)
+    are the OPD reward weights computed by compute_opd_advantages. This is
+    reward-weighted behavior cloning with a single unified objective — no PPO
+    clipping, no separate KL term, no frozen teacher model needed.
+
+    The log-likelihood log pi_theta(a|s) for flow models uses the Flow-Noise
+    formulation from pi-RL (arXiv:2510.25889): each denoising step contributes
+    a Normal log-prob, and the total is their sum over the stored chain.
+
+    Args:
+        logprobs: Student log-probabilities. Shape: [B] or [B, action_chunk].
+        advantages: OPD weights w_i = softmax(R/beta). Same shape as logprobs.
+        loss_mask: Boolean mask for valid entries. Same shape as logprobs.
+
+    Returns:
+        Tuple of (loss, metrics_dict).
+    """
+    assert logprobs.dtype == torch.float32, (
+        "logprobs must be float32 for numerical stability"
+    )
+    if loss_mask is None:
+        loss_mask = torch.ones_like(logprobs).bool()
+
+    loss = -masked_mean(advantages * logprobs, loss_mask)
+    metrics_data = {
+        "opd/loss": loss.detach().item(),
+        "opd/mean_weight": masked_mean(advantages, loss_mask).detach().item(),
+        "opd/mean_logprob": masked_mean(logprobs, loss_mask).detach().item(),
+    }
+    return loss, metrics_data
+
+
 @register_policy_loss("actor")
 def compute_grpo_actor_loss_fn(**kwargs) -> tuple[torch.Tensor, dict]:
     """
