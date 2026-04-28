@@ -438,20 +438,19 @@ def compute_opd_flow_loss(
     loss_mask: Optional[torch.Tensor] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, dict]:
-    """OPD loss for flow-based action heads.
+    """OPD (On-Policy Distillation) policy loss for flow-based action heads.
 
-    Implements L = -E[w_i * log pi_theta(a_i|s_i)] where w_i = softmax(R_i/beta)
-    are the OPD reward weights computed by compute_opd_advantages. This is
-    reward-weighted behavior cloning with a single unified objective — no PPO
-    clipping, no separate KL term, no frozen teacher model needed.
+    Implements REINFORCE with KL intrinsic reward:
+        r_t = log pi_teacher(a_t|s_t) - log pi_student_old(a_t|s_t)
+        L = -E[r_t * log pi_theta(a_t|s_t)]
 
-    The log-likelihood log pi_theta(a|s) for flow models uses the Flow-Noise
-    formulation from pi-RL (arXiv:2510.25889): each denoising step contributes
-    a Normal log-prob, and the total is their sum over the stored chain.
+    The teacher is a frozen copy of the RL-trained policy. advantages here are
+    the KL rewards r_t injected by EmbodiedOPDFSDPActor.compute_advantages_and_returns().
+    The flow log-probs use the Flow-Noise formulation from pi-RL (arXiv:2510.25889).
 
     Args:
-        logprobs: Student log-probabilities. Shape: [B] or [B, action_chunk].
-        advantages: OPD weights w_i = softmax(R/beta). Same shape as logprobs.
+        logprobs: Student log-probabilities. Shape: [B].
+        advantages: KL intrinsic rewards r_t. Same shape as logprobs.
         loss_mask: Boolean mask for valid entries. Same shape as logprobs.
 
     Returns:

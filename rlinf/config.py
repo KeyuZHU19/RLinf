@@ -808,11 +808,9 @@ def validate_embodied_cfg(cfg):
         )
 
     if cfg.algorithm.loss_type == "opd_flow":
-        assert cfg.algorithm.adv_type == "opd", (
-            "opd_flow loss requires adv_type: opd"
-        )
-        assert OmegaConf.select(cfg, "algorithm.opd_beta") is not None, (
-            "algorithm.opd_beta is required when using loss_type: opd_flow"
+        assert cfg.algorithm.adv_type == "raw", (
+            "opd_flow loss requires adv_type: raw "
+            "(KL rewards are injected as raw advantages by EmbodiedOPDFSDPActor)"
         )
 
     # process num-envs

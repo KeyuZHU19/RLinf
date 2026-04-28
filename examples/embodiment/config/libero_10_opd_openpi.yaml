@@ -37,9 +37,10 @@ runner:
   ckpt_path: null
 
 algorithm:
-  normalize_advantages: False  # softmax weights are already normalized
-  group_size: 8                # trajectories per group for softmax normalization
+  normalize_advantages: False  # KL rewards are not re-normalized
+  group_size: 8
   reward_coef: 1.0
+  teacher_checkpoint: null      # path to frozen teacher weights; null = use model_path
   rollout_epoch: 8
   eval_rollout_epoch: 1
 
@@ -48,9 +49,8 @@ algorithm:
   entropy_type: token_level
 
   update_epoch: 4
-  adv_type: opd                # reward-weighted softmax advantages
-  loss_type: opd_flow          # -E[w_i * log pi_theta(a_i|s_i)]
-  opd_beta: 1.0                # softmax temperature beta; higher = more uniform weights
+  adv_type: raw                # KL intrinsic rewards injected by EmbodiedOPDFSDPActor
+  loss_type: opd_flow          # -E[r_t * log pi_theta(a_t|s_t)], r_t = log pi_teacher - log pi_old
 
   entropy_bonus: 0
 
