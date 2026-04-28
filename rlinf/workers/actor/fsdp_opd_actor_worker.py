@@ -74,12 +74,14 @@ class EmbodiedOPDFSDPActor(EmbodiedFSDPActor):
         self.log_info("[OPD] Teacher model initialised and frozen.")
 
     def compute_advantages_and_returns(self) -> dict[str, torch.Tensor]:
-        """Replace standard advantage computation with OPD KL intrinsic rewards.
+        """Compute and store teacher log-probs for on-policy KL reward (VLA-OPD Algorithm 1).
 
-        Computes r_t = log pi_teacher(a_t|s_t) - log pi_student_old(a_t|s_t)
-        for every chunk step and stores the result in rollout_batch["advantages"]
-        with shape [n_chunk_steps, B, 1] so that the existing training pipeline
-        consumes it unchanged via loss_type: opd_flow.
+        Stores chunk-level teacher log-probs as rollout_batch["advantages"].
+        r_t = log pi_teacher - log pi_student_CURRENT is computed fresh at every
+        gradient step inside compute_opd_flow_loss, so the reward always reflects
+        the current policy (not a stale rollout snapshot).
+
+        Shape stored: [n_chunk_steps, B, 1]  — same as advantages in other algorithms.
         """
         prev_logprobs = self.rollout_batch["prev_logprobs"]  # [n_chunks, B, ...]
         forward_inputs = self.rollout_batch.get("forward_inputs", None)
@@ -111,15 +113,14 @@ class EmbodiedOPDFSDPActor(EmbodiedFSDPActor):
 
         teacher_logprobs = torch.stack(teacher_logprobs_list, dim=0)  # [n_chunks, B, ...]
 
-        # KL reward: sum over action-chunk dimension if present
-        kl_reward = teacher_logprobs - prev_logprobs.float()
-        while kl_reward.dim() > 2:
-            kl_reward = kl_reward.sum(dim=-1)
+        # Reduce to chunk-level scalar (sum over action dims) to match chunk_level logprob_type.
+        # This mirrors how student logprobs are processed in preprocess_loss_inputs.
+        while teacher_logprobs.dim() > 2:
+            teacher_logprobs = teacher_logprobs.sum(dim=-1)  # [n_chunks, B]
 
-        # Shape expected by preprocess_embodied_advantages_inputs: [n_chunks, B, 1]
-        kl_reward = kl_reward.unsqueeze(-1).detach()
-
-        self.rollout_batch["advantages"] = kl_reward
+        # Store teacher log-probs as "advantages"; r_t is computed fresh in the loss.
+        # Shape [n_chunks, B, 1] matches the pipeline expectation.
+        self.rollout_batch["advantages"] = teacher_logprobs.unsqueeze(-1)  # [n_chunks, B, 1]
         self.rollout_batch.pop("returns", None)
 
         return compute_rollout_metrics(self.rollout_batch)
