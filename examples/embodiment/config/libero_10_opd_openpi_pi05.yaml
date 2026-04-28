@@ -48,7 +48,7 @@ algorithm:
   logprob_type: chunk_level
   entropy_type: token_level
 
-  update_epoch: 4
+  update_epoch: 1
   adv_type: raw                # KL intrinsic rewards injected by EmbodiedOPDFSDPActor
   loss_type: opd_flow          # -E[r_t * log pi_theta(a_t|s_t)], r_t = log pi_teacher - log pi_old
 
