@@ -807,6 +807,12 @@ def validate_embodied_cfg(cfg):
             f"Current value: {add_value_head}"
         )
 
+    if cfg.algorithm.loss_type == "opd_flow":
+        assert cfg.algorithm.adv_type == "raw", (
+            "opd_flow loss requires adv_type: raw "
+            "(KL rewards are injected as raw advantages by EmbodiedOPDFSDPActor)"
+        )
+
     # process num-envs
     component_placement = HybridComponentPlacement(cfg, Cluster())
     stage_num = cfg.rollout.pipeline_stage_num

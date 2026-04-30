@@ -431,6 +431,55 @@ def compute_ppo_actor_critic_loss(**kwargs) -> tuple[torch.Tensor, dict]:
     return loss, metrics_data
 
 
+@register_policy_loss("opd_flow")
+def compute_opd_flow_loss(
+    logprobs: torch.Tensor,
+    advantages: torch.Tensor,
+    loss_mask: Optional[torch.Tensor] = None,
+    **kwargs,
+) -> tuple[torch.Tensor, dict]:
+    """OPD (On-Policy Distillation) policy loss for flow-based action heads.
+
+    Implements VLA-OPD Algorithm 1 (arXiv:2603.26666) with Flow-Noise log-probs
+    from pi-RL (arXiv:2510.25889).
+
+    The intrinsic reward is computed fresh at every gradient step:
+        r_t = log pi_teacher(a_t|s_t) - sg(log pi_theta(a_t|s_t))   [Algorithm 1 Line 12]
+        L = -E[r_t * log pi_theta(a_t|s_t)]                          [Algorithm 1 Line 18]
+
+    where sg(·) is stop-gradient.  Crucially, r_t uses the CURRENT student
+    policy (not the stale rollout snapshot), so each gradient step sees an
+    up-to-date KL signal — matching the algorithm exactly.
+
+    Args:
+        logprobs: Student log-probabilities (current theta). Shape: [B].
+        advantages: Teacher log-probabilities (chunk-level sum, frozen).
+                    Stored by EmbodiedOPDFSDPActor.compute_advantages_and_returns().
+                    Same shape as logprobs after preprocessing.
+        loss_mask: Boolean mask for valid entries. Same shape as logprobs.
+
+    Returns:
+        Tuple of (loss, metrics_dict).
+    """
+    assert logprobs.dtype == torch.float32, (
+        "logprobs must be float32 for numerical stability"
+    )
+    if loss_mask is None:
+        loss_mask = torch.ones_like(logprobs).bool()
+
+    # advantages here = log pi_teacher (stored at rollout time, frozen)
+    # r_t is computed fresh using the CURRENT student logprobs (Algorithm 1 Line 12)
+    r_t = (advantages - logprobs.detach())
+    loss = -masked_mean(r_t * logprobs, loss_mask)
+    metrics_data = {
+        "opd/loss": loss.detach().item(),
+        "opd/mean_kl_reward": masked_mean(r_t, loss_mask).detach().item(),
+        "opd/mean_teacher_logprob": masked_mean(advantages, loss_mask).detach().item(),
+        "opd/mean_student_logprob": masked_mean(logprobs, loss_mask).detach().item(),
+    }
+    return loss, metrics_data
+
+
 @register_policy_loss("actor")
 def compute_grpo_actor_loss_fn(**kwargs) -> tuple[torch.Tensor, dict]:
     """
