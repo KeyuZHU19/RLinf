@@ -508,3 +508,49 @@ def compute_grpo_actor_loss_fn(**kwargs) -> tuple[torch.Tensor, dict]:
     metrics_data.update(actor_metrics_data)
 
     return actor_loss, metrics_data
+
+@register_policy_loss("opd_flow_ppo")
+def compute_opd_flow_ppo_loss(**kwargs):
+    """PPO-clip OPD with KL-as-reward (Flow-OPD Eq. 11).
+
+    Expects advantages = teacher_logprobs - prev_logprobs (frozen at rollout,
+    stored by EmbodiedOPDFSDPActor when cfg.algorithm.opd_form==ppo).
+    Reuses compute_ppo_actor_loss verbatim:
+        rho_t = exp(logprobs - old_logprobs)
+        L     = -E[min(rho_t * adv, clip(rho_t, 1-eps, 1+eps) * adv)]
+    """
+    return compute_ppo_actor_loss(**kwargs)
+
+@register_policy_loss("opd_flow_reparam")
+def compute_opd_flow_reparam_loss(
+    logprobs: torch.Tensor,
+    advantages: torch.Tensor,
+    loss_mask=None,
+    **kwargs,
+):
+    """DAgger-flow / reparameterization-gradient OPD (Cell C of the plan).
+
+    advantages = teacher_logprob (frozen at rollout, stored by
+    EmbodiedOPDFSDPActor with opd_form="reinforce").
+
+    Loss = E[(student_lp - teacher_lp.detach())^2].
+    Gradient flows through student_lp directly — no policy-gradient
+    framework, no log-prob ratio, no stop-grad-on-reward trick.
+    This is the negative-control baseline: tests whether the
+    REINFORCE/PPO machinery contributes over a direct reparam loss
+    that matches student velocities to teacher velocities via the
+    Gaussian log-prob proxy (log_pi ~ -||x_end - mu||^2/(2 sigma^2 dt)).
+    """
+    assert logprobs.dtype == torch.float32
+    if loss_mask is None:
+        loss_mask = torch.ones_like(logprobs).bool()
+    teacher = advantages.detach()
+    diff = logprobs - teacher
+    loss = masked_mean(diff ** 2, loss_mask)
+    return loss, {
+        "opd_reparam/loss": loss.detach().item(),
+        "opd_reparam/mean_diff": masked_mean(diff, loss_mask).detach().item(),
+        "opd_reparam/mean_student_lp": masked_mean(logprobs, loss_mask).detach().item(),
+        "opd_reparam/mean_teacher_lp": masked_mean(teacher, loss_mask).detach().item(),
+    }
+

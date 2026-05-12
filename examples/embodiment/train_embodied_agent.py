@@ -58,7 +58,7 @@ def main(cfg) -> None:
         from rlinf.workers.actor.fsdp_nft_policy_worker import EmbodiedNFTFSDPPolicy
 
         actor_worker_cls = EmbodiedNFTFSDPPolicy
-    elif cfg.algorithm.loss_type == "opd_flow":
+    elif cfg.algorithm.loss_type in ("opd_flow", "opd_flow_ppo", "opd_flow_reparam"):
         from rlinf.workers.actor.fsdp_opd_actor_worker import EmbodiedOPDFSDPActor
 
         actor_worker_cls = EmbodiedOPDFSDPActor

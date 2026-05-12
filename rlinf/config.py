@@ -807,7 +807,7 @@ def validate_embodied_cfg(cfg):
             f"Current value: {add_value_head}"
         )
 
-    if cfg.algorithm.loss_type == "opd_flow":
+    if cfg.algorithm.loss_type in ("opd_flow", "opd_flow_ppo", "opd_flow_reparam"):
         assert cfg.algorithm.adv_type == "raw", (
             "opd_flow loss requires adv_type: raw "
             "(KL rewards are injected as raw advantages by EmbodiedOPDFSDPActor)"

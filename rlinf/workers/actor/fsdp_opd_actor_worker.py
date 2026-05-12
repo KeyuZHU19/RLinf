@@ -87,14 +87,18 @@ class EmbodiedOPDFSDPActor(EmbodiedFSDPActor):
         forward_inputs = self.rollout_batch.get("forward_inputs", None)
         n_chunks = prev_logprobs.shape[0]
 
-        device = prev_logprobs.device
+        # Use the local GPU device, not prev_logprobs.device: rollout-->actor
+        # transfer goes through Ray channels which deserialize CUDA tensors to
+        # CPU. Reading device from prev_logprobs would silently move teacher
+        # (and the whole forward) onto CPU, hanging for hours.
+        device = f"{self.torch_device_type}:{int(os.environ['LOCAL_RANK'])}"
         self.teacher_model = self.teacher_model.to(device)
 
         teacher_logprobs_list = []
         for i in range(n_chunks):
             if forward_inputs is not None:
                 chunk_fwd = {
-                    k: v[i]
+                    k: v[i].to(device)
                     for k, v in forward_inputs.items()
                     if isinstance(v, torch.Tensor)
                 }
@@ -118,9 +122,22 @@ class EmbodiedOPDFSDPActor(EmbodiedFSDPActor):
         while teacher_logprobs.dim() > 2:
             teacher_logprobs = teacher_logprobs.sum(dim=-1)  # [n_chunks, B]
 
-        # Store teacher log-probs as "advantages"; r_t is computed fresh in the loss.
-        # Shape [n_chunks, B, 1] matches the pipeline expectation.
-        self.rollout_batch["advantages"] = teacher_logprobs.unsqueeze(-1)  # [n_chunks, B, 1]
+        # Store advantages per opd_form:
+        #   - reinforce (default): advantages = teacher_logprobs; r_t computed fresh in loss
+        #     using current student log_prob (VLA-OPD Algorithm 1 / Flow-OPD off the shelf).
+        #   - ppo: advantages = teacher_logprobs - prev_logprobs (frozen r_t at rollout);
+        #     the standard PPO-clip loss is then used with rho_t = exp(logprob_now - prev_logprobs).
+        opd_form = self.cfg.algorithm.get("opd_form", "reinforce")
+        if opd_form == "ppo":
+            prev_logprobs_red = self.rollout_batch["prev_logprobs"]
+            while prev_logprobs_red.dim() > 2:
+                prev_logprobs_red = prev_logprobs_red.sum(dim=-1)
+            adv = (teacher_logprobs - prev_logprobs_red.to(teacher_logprobs.device)).unsqueeze(-1)
+        elif opd_form == "reinforce":
+            adv = teacher_logprobs.unsqueeze(-1)
+        else:
+            raise ValueError(f"Unknown opd_form: {opd_form!r}")
+        self.rollout_batch["advantages"] = adv  # [n_chunks, B, 1]
         self.rollout_batch.pop("returns", None)
 
         return compute_rollout_metrics(self.rollout_batch)
