@@ -33,6 +33,35 @@ from rlinf.utils.metric_utils import compute_rollout_metrics
 from rlinf.workers.actor.fsdp_actor_worker import EmbodiedFSDPActor
 
 
+
+
+def _load_state_dict_from_path(path):
+    """Load a model state_dict from either a .pt file or an HF safetensors directory.
+
+    HF directories may have a single model.safetensors or a sharded layout (.index.json + shards).
+    """
+    import os
+    if os.path.isfile(path):
+        sd = torch.load(path, map_location="cpu")
+        if "model" in sd:
+            sd = sd["model"]
+        return sd
+    if os.path.isdir(path):
+        import json
+        import safetensors.torch as st
+        idx = os.path.join(path, "model.safetensors.index.json")
+        if os.path.exists(idx):
+            with open(idx) as f:
+                index = json.load(f)
+            sd = {}
+            for shard in sorted(set(index["weight_map"].values())):
+                sd.update(st.load_file(os.path.join(path, shard)))
+            return sd
+        single = os.path.join(path, "model.safetensors")
+        if os.path.exists(single):
+            return st.load_file(single)
+    raise FileNotFoundError(f"Cannot load state_dict from {path!r}")
+
 class EmbodiedOPDFSDPActor(EmbodiedFSDPActor):
     """EmbodiedFSDPActor that replaces the advantage computation with OPD KL rewards.
 
@@ -61,10 +90,16 @@ class EmbodiedOPDFSDPActor(EmbodiedFSDPActor):
         self.log_info(f"[OPD] Loading teacher weights from {ckpt_path}")
 
         if teacher_ckpt is not None:
-            state_dict = torch.load(teacher_ckpt, map_location="cpu")
-            if "model" in state_dict:
-                state_dict = state_dict["model"]
-            self.teacher_model.load_state_dict(state_dict, strict=True)
+            state_dict = _load_state_dict_from_path(teacher_ckpt)
+            # Drop value_head.* keys — RLinf-released PPO checkpoints include
+            # a critic head that does not exist in the teacher PI0Pytorch
+            # built here (add_value_head=False for OPD). Without this,
+            # load_state_dict(strict=True) raises on unexpected keys.
+            state_dict = {k: v for k, v in state_dict.items() if not k.startswith("value_head")}
+            missing, unexpected = self.teacher_model.load_state_dict(state_dict, strict=False)
+            self.log_info(f"[OPD] Teacher load: {len(missing)} missing, {len(unexpected)} unexpected")
+            if unexpected:
+                self.log_info(f"[OPD] First unexpected: {unexpected[:3]}")
 
         device = f"{self.torch_device_type}:{int(os.environ['LOCAL_RANK'])}"
         self.teacher_model = self.teacher_model.to(device)
