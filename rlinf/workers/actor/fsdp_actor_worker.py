@@ -1372,7 +1372,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         )
         metrics = {}
         update_epoch = self.cfg.algorithm.get("update_epoch", 1)
-        for _ in range(update_epoch):
+        for _v2_iter in range(update_epoch):  # per-inner-update tracking
+            _v2_epoch_metrics = {}
             rollout_dataloader_iter = split_dict_to_chunk(
                 self.rollout_batch,
                 rollout_size // batch_size_per_rank,
@@ -1459,8 +1460,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                         "advantages": advantages,
                         "returns": returns,
                         "prev_values": prev_values,
-                        "clip_ratio_high": self.cfg.algorithm.clip_ratio_high,
-                        "clip_ratio_low": self.cfg.algorithm.clip_ratio_low,
+                        "clip_ratio_high": self.cfg.algorithm.get("clip_ratio_high", None),
+                        "clip_ratio_low": self.cfg.algorithm.get("clip_ratio_low", None),
                         "value_clip": self.cfg.algorithm.get("value_clip", None),
                         "huber_delta": self.cfg.algorithm.get("huber_delta", None),
                         "loss_mask": loss_mask,
@@ -1499,6 +1500,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
 
                     metrics_data["actor/total_loss"] = loss.detach().item()
                     append_to_dict(metrics, metrics_data)
+                    append_to_dict(_v2_epoch_metrics, metrics_data)
 
                 self.torch_platform.empty_cache()
 
@@ -1510,6 +1512,25 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                 if len(lr_list) > 1:
                     data["critic/lr"] = lr_list[1]
                 append_to_dict(metrics, data)
+            # ===== V2: log per-K_ppo-inner-update averages =====
+            try:
+                _keys_of_interest = ("actor/ratio", "actor/clip_fraction",
+                                     "actor/approx_kl", "actor/grad_norm",
+                                     "actor/policy_loss", "actor/total_loss")
+                _msg_parts = [f"[V2-INNER] inner_update={_v2_iter+1}/{update_epoch}"]
+                for _k in _keys_of_interest:
+                    if _k in _v2_epoch_metrics:
+                        _vals = _v2_epoch_metrics[_k]
+                        if hasattr(_vals[0], "item"):
+                            _vals = [v.item() for v in _vals]
+                        import numpy as _np
+                        _m = float(_np.mean(_vals))
+                        _msg_parts.append(f"{_k.split(chr(47))[-1]}={_m:.4f}")
+                        # Also store as suffixed metric so it survives np.mean
+                        metrics[f"{_k}_update{_v2_iter+1}"] = [_m]
+                self.log_info(" ".join(_msg_parts))
+            except Exception as _e:
+                self.log_warning(f"[V2-INNER] failed to log: {_e!r}")
         # put LR scheduler step here
         self.lr_scheduler.step()
         self.optimizer.zero_grad()
