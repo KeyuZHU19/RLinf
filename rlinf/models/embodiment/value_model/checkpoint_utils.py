@@ -92,6 +92,8 @@ def load_norm_stats(checkpoint_dir: pathlib.Path, asset_id: str = "libero") -> d
     import openpi.transforms as _openpi_transforms
 
     possible_paths = [
+        checkpoint_dir / asset_id / "norm_stats.json",
+        checkpoint_dir / "assets" / asset_id / "norm_stats.json",
         checkpoint_dir / "norm_stats" / asset_id / "norm_stats.json",
         checkpoint_dir / "stats" / asset_id / "norm_stats.json",
         checkpoint_dir / "norm_stats.json",

@@ -16,7 +16,7 @@ hydra:
 cluster:
   num_nodes: 1
   component_placement:
-    actor, env, rollout: 0-7
+    actor,env,rollout: all
 
 runner:
   task_type: embodied
@@ -94,7 +94,7 @@ env:
     max_episode_steps: 200
     max_steps_per_rollout_epoch: 200
     group_size: ${algorithm.group_size}
-    assets_path: "/path/to/robotwin_assets"
+    assets_path: "/anvil/scratch/x-kzhu7/RoboTwin"
     seeds_path: ${oc.env:REPO_PATH}/rlinf/envs/robotwin/seeds/train_seeds.json
     center_crop: False
     task_config:
@@ -119,7 +119,7 @@ env:
     group_size: 1
     use_fixed_reset_state_ids: True
     is_eval: True
-    assets_path: "/path/to/robotwin_assets"
+    assets_path: "/anvil/scratch/x-kzhu7/RoboTwin"
     seeds_path: ${oc.env:REPO_PATH}/rlinf/envs/robotwin/seeds/eval_seeds.json
     video_cfg:
       save_video: True

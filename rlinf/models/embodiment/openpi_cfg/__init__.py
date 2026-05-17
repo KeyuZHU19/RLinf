@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+import pathlib
 
 import torch
 from omegaconf import DictConfig
@@ -23,12 +24,14 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     import openpi.shared.download as download
     import openpi.transforms as transforms
     import safetensors
-    from openpi.training import checkpoints as _checkpoints
 
     from rlinf.models.embodiment.openpi.dataconfig import get_openpi_config
     from rlinf.models.embodiment.openpi_cfg.openpi_cfg_action_model import (
         OpenPi0Config,
         OpenPi0ForCFGActionPrediction,
+    )
+    from rlinf.models.embodiment.value_model.checkpoint_utils import (
+        load_norm_stats as _load_norm_stats,
     )
 
     config_name = getattr(cfg.openpi, "config_name", None)
@@ -73,7 +76,7 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     )
     if data_config.asset_id is None:
         raise ValueError("Asset id is required to load norm stats.")
-    norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
+    norm_stats = _load_norm_stats(pathlib.Path(checkpoint_dir), data_config.asset_id)
 
     repack_transforms = transforms.Group()
     default_prompt = None

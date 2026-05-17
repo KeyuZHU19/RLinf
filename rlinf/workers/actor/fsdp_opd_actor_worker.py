@@ -175,4 +175,28 @@ class EmbodiedOPDFSDPActor(EmbodiedFSDPActor):
         self.rollout_batch["advantages"] = adv  # [n_chunks, B, 1]
         self.rollout_batch.pop("returns", None)
 
+        # ===== Pre-flight Verification 1: log r_t distribution =====
+        # r_t = teacher_logprobs - prev_logprobs_reduced (frozen-at-rollout form)
+        try:
+            prev_lp_red = self.rollout_batch["prev_logprobs"]
+            while prev_lp_red.dim() > 2:
+                prev_lp_red = prev_lp_red.sum(dim=-1)
+            prev_lp_red = prev_lp_red.to(teacher_logprobs.device).float()
+            r_t = (teacher_logprobs.float() - prev_lp_red).flatten()
+            q = torch.quantile(r_t, torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0], device=r_t.device))
+            self.log_info(
+                f"[OPD-V1] r_t stats: n={r_t.numel()} mean={r_t.mean().item():.4f} "
+                f"std={r_t.std().item():.4f} min={q[0].item():.4f} p25={q[1].item():.4f} "
+                f"p50={q[2].item():.4f} p75={q[3].item():.4f} max={q[4].item():.4f}"
+            )
+            # Also log teacher_lp and prev_lp on their own (sanity)
+            tl = teacher_logprobs.float().flatten()
+            sl = prev_lp_red.flatten()
+            self.log_info(
+                f"[OPD-V1] teacher_lp: mean={tl.mean().item():.3f} std={tl.std().item():.3f}; "
+                f"student_lp(SFT): mean={sl.mean().item():.3f} std={sl.std().item():.3f}"
+            )
+        except Exception as _e:
+            self.log_warning(f"[OPD-V1] failed to compute r_t stats: {_e!r}")
+
         return compute_rollout_metrics(self.rollout_batch)
