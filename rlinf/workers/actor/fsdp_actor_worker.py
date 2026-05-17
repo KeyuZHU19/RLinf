@@ -1407,6 +1407,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                     )
                     advantages = batch["advantages"]
                     prev_logprobs = batch["prev_logprobs"]
+                    ref_logprobs = batch.get("ref_logprobs", None)
                     returns = batch.get("returns", None)
                     prev_values = batch.get("prev_values", None)
                     loss_mask = batch.get("loss_mask", None)
@@ -1457,6 +1458,8 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                         "logprobs": output_dict["logprobs"],
                         "values": output_dict.get("values", None),
                         "old_logprobs": prev_logprobs,
+                        "ref_logprobs": ref_logprobs,
+                        "kl_beta": self.cfg.algorithm.get("kl_beta", 0.0),
                         "advantages": advantages,
                         "returns": returns,
                         "prev_values": prev_values,

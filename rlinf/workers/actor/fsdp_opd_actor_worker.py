@@ -73,6 +73,29 @@ class EmbodiedOPDFSDPActor(EmbodiedFSDPActor):
     def init_worker(self) -> None:
         super().init_worker()
         self._init_teacher_model()
+        self._init_ref_model()
+
+    def _init_ref_model(self) -> None:
+        # MAR anchor: frozen copy of the student SFT-init (Flow-OPD Eq.12).
+        # Counters closed-loop off-manifold drift. Active only if kl_beta>0.
+        self._mar_kl_beta = float(self.cfg.algorithm.get("kl_beta", 0.0) or 0.0)
+        if self._mar_kl_beta <= 0.0:
+            self.ref_model = None
+            self.log_info("[OPD-MAR] kl_beta<=0; MAR anchor disabled.")
+            return
+        model_path = self.cfg.actor.model.model_path
+        self.ref_model = get_model(self.cfg.actor.model)
+        if self.ref_model is None:
+            raise RuntimeError("get_model() returned None for ref_model.")
+        state_dict = _load_state_dict_from_path(model_path)
+        state_dict = {k: v for k, v in state_dict.items() if not k.startswith("value_head")}
+        missing, unexpected = self.ref_model.load_state_dict(state_dict, strict=False)
+        self.log_info(f"[OPD-MAR] Ref(SFT-init) load: {len(missing)} missing, {len(unexpected)} unexpected")
+        device = f"{self.torch_device_type}:{int(os.environ['LOCAL_RANK'])}"
+        self.ref_model = self.ref_model.to(device)
+        self.ref_model.requires_grad_(False)
+        self.ref_model.eval()
+        self.log_info(f"[OPD-MAR] Ref frozen; MAR kl_beta={self._mar_kl_beta}")
 
     def _init_teacher_model(self) -> None:
         teacher_ckpt = self.cfg.algorithm.get("teacher_checkpoint", None)
@@ -174,6 +197,22 @@ class EmbodiedOPDFSDPActor(EmbodiedFSDPActor):
             raise ValueError(f"Unknown opd_form: {opd_form!r}")
         self.rollout_batch["advantages"] = adv  # [n_chunks, B, 1]
         self.rollout_batch.pop("returns", None)
+
+        # ===== MAR anchor: frozen SFT-init ref logprobs (same shape as prev_logprobs) =====
+        if getattr(self, "ref_model", None) is not None:
+            self.ref_model = self.ref_model.to(device)
+            ref_lp_list = []
+            for i in range(n_chunks):
+                if forward_inputs is not None:
+                    chunk_fwd = {k: v[i].to(device) for k, v in forward_inputs.items() if isinstance(v, torch.Tensor)}
+                else:
+                    chunk_fwd = None
+                with torch.no_grad(), self.amp_context:
+                    ref_out = self.ref_model(forward_inputs=chunk_fwd, compute_logprobs=True, compute_entropy=False, compute_values=False, use_cache=False)
+                ref_lp_list.append(ref_out["logprobs"].detach().float())
+            ref_logprobs = torch.stack(ref_lp_list, dim=0)  # [n_chunks, B, ...]
+            self.rollout_batch["ref_logprobs"] = ref_logprobs.to(self.rollout_batch["prev_logprobs"].device)
+            self.log_info(f"[OPD-MAR] ref_logprobs stored shape={tuple(ref_logprobs.shape)} mean={ref_logprobs.float().mean().item():.3f}")
 
         # ===== Pre-flight Verification 1: log r_t distribution =====
         # r_t = teacher_logprobs - prev_logprobs_reduced (frozen-at-rollout form)

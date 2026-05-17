@@ -307,6 +307,7 @@ def preprocess_loss_inputs(
 
     bsz = logprobs.shape[0]
     proximal_logprobs = kwargs.get("proximal_logprobs", None)
+    ref_logprobs = kwargs.get("ref_logprobs", None)
     if logprob_type == "token_level":
         # logprobs, old_logprobs: [bsz, num_action_chunks, action_dim] -> [bsz, num_action_chunks, action_dim]
         logprobs = logprobs.reshape(bsz, -1, single_action_dim)
@@ -336,6 +337,8 @@ def preprocess_loss_inputs(
         # logprobs, old_logprobs: [bsz, num_action_chunks, action_dim] -> [bsz]
         logprobs = logprobs.reshape(bsz, -1, single_action_dim).sum(dim=[1, 2])
         old_logprobs = old_logprobs.reshape(bsz, -1, single_action_dim).sum(dim=[1, 2])
+        if ref_logprobs is not None:
+            ref_logprobs = ref_logprobs.reshape(bsz, -1, single_action_dim).sum(dim=[1, 2])
         if proximal_logprobs is not None:
             proximal_logprobs = proximal_logprobs.reshape(
                 bsz, -1, single_action_dim
@@ -356,6 +359,7 @@ def preprocess_loss_inputs(
         {
             "logprobs": logprobs,
             "old_logprobs": old_logprobs,
+            "ref_logprobs": ref_logprobs,
             "proximal_logprobs": proximal_logprobs,
             "versions": versions,
             "advantages": advantages,

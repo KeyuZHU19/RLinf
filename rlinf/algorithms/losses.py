@@ -477,6 +477,15 @@ def compute_opd_flow_loss(
         "opd/mean_teacher_logprob": masked_mean(advantages, loss_mask).detach().item(),
         "opd/mean_student_logprob": masked_mean(logprobs, loss_mask).detach().item(),
     }
+    kl_beta = float(kwargs.get("kl_beta", 0.0) or 0.0)
+    ref_logprobs = kwargs.get("ref_logprobs", None)
+    if kl_beta > 0.0 and ref_logprobs is not None:
+        ref_logprobs = ref_logprobs.to(logprobs.dtype)
+        anchor = masked_mean((logprobs - ref_logprobs.detach()) ** 2, loss_mask)
+        loss = loss + kl_beta * anchor
+        metrics_data["opd/anchor_sq"] = anchor.detach().item()
+        metrics_data["opd/kl_beta"] = kl_beta
+        metrics_data["opd/mean_ref_logprob"] = masked_mean(ref_logprobs, loss_mask).detach().item()
     return loss, metrics_data
 
 
