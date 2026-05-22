@@ -394,8 +394,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         images = [img.to(device) for img in images]
         img_masks = [img_mask.to(device) for img_mask in img_masks]
         state = state.to(device)
-        # get log prob
-        log_probs, value_t, entropy = self.get_log_prob_value(
+        # get log prob (Flow-OPD: also returns per-step means & stds)
+        log_probs, value_t, entropy, step_means, step_stds = self.get_log_prob_value(
             images,
             img_masks,
             lang_tokens,
@@ -411,17 +411,32 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         entropy = entropy[
             :, :, : self.config.action_chunk, : self.config.action_env_dim
         ]
+        # Slice means/stds to the same window so the Flow-OPD per-step
+        # Gaussian-KL is computed only over real action coordinates.
+        step_means = step_means[
+            :, :, : self.config.action_chunk, : self.config.action_env_dim
+        ]
+        step_stds = step_stds[
+            :, :, : self.config.action_chunk, : self.config.action_env_dim
+        ]
         # post process
         log_probs = log_probs.mean(dim=1)
         entropy = entropy.mean(dim=[1, 2, 3], keepdim=False)[
             :, None
         ]  # [:,None] to align with loss-mask shape
         value_t = value_t.mean(dim=-1, keepdim=False)
-        return {
+        out = {
             "logprobs": log_probs,
             "values": value_t,
             "entropy": entropy,
         }
+        # Flow-OPD path opt-in: actor sets return_step_means=True at no extra
+        # cost (step_means are computed anyway); standard PG paths leave it
+        # False and the extra tensors are simply not returned.
+        if kwargs.get("return_step_means", False):
+            out["step_means"] = step_means  # [B, num_steps(+1 if joint_logprob), chunk, action_dim]
+            out["step_stds"] = step_stds
+        return out
 
     def forward_nft(
         self,
@@ -956,6 +971,11 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         chains_log_probs = []
         chains_values = []
         chains_entropy = []
+        # Flow-OPD: also collect per-denoise-step means and stds so callers can
+        # compute the per-step Gaussian-KL  ‖μ_s − μ_t‖² / (2σ²) between the
+        # student and teacher SDE transition kernels (Flow-OPD Eq.10).
+        chains_means = []
+        chains_stds = []
 
         # get log prob
         if self.config.joint_logprob:
@@ -968,6 +988,9 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             initial_entropy = self.gaussian_entropy(torch.ones_like(chains[:, 0]))
             chains_log_probs.append(initial_log_prob)
             chains_entropy.append(initial_entropy)
+            # Placeholders so chains_means aligns with chains_log_probs along dim=1.
+            chains_means.append(torch.zeros_like(chains[:, 0]))
+            chains_stds.append(torch.ones_like(chains[:, 0]))
         else:
             num_steps = 1
         for idx in range(num_steps):
@@ -988,19 +1011,23 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             entropy = self.gaussian_entropy(x_t_std)
             chains_log_probs.append(log_probs)
             chains_entropy.append(entropy)
+            chains_means.append(x_t_mean)
+            chains_stds.append(x_t_std)
             if not self.use_vlm_value:
                 chains_values.append(value_t)
         if self.use_vlm_value:
             chains_values.append(self.get_value_from_vlm(prefix_output))
         chains_log_probs = torch.stack(chains_log_probs, dim=1)
         chains_values = torch.stack(chains_values, dim=1)
+        chains_means = torch.stack(chains_means, dim=1)
+        chains_stds = torch.stack(chains_stds, dim=1)
 
         # entropy is only available for flow-noise method
         if self.config.noise_method == "flow_noise":
             chains_entropy = torch.stack(chains_entropy, dim=1)
         else:
             chains_entropy = torch.zeros_like(chains_log_probs)
-        return chains_log_probs, chains_values, chains_entropy
+        return chains_log_probs, chains_values, chains_entropy, chains_means, chains_stds
 
     def get_value_from_vlm(self, prefix_output):
         # prefix_output:

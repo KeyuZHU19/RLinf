@@ -489,6 +489,24 @@ def compute_opd_flow_loss(
     return loss, metrics_data
 
 
+@register_policy_loss("opd_flow_kl")
+def compute_opd_flow_kl_loss_fn(**kwargs) -> tuple[torch.Tensor, dict]:
+    """Flow-OPD v2 loss = standard PPO-clip surrogate.
+
+    The Flow-OPD per-step Gaussian-KL is consumed UPSTREAM as the advantage
+    (advantage_t = -‖μ_s − μ_T‖²/(2σ²), formed by EmbodiedOPDV2FSDPActor).
+    Here we just run the usual PPO-clip surrogate
+        L = -E[min(ρ·A, clip(ρ, 1-ε, 1+ε)·A)],   ρ = exp(log π_new − log π_old)
+    against that advantage — the policy gradient becomes
+        ∇_θ L ≈ -A · ∇_θ log π_θ
+    which is the standard REINFORCE/PPO update on a velocity-MSE reward.
+    """
+    metrics_data = {}
+    actor_loss, actor_metrics_data = compute_ppo_actor_loss(**kwargs)
+    metrics_data.update(actor_metrics_data)
+    return actor_loss, metrics_data
+
+
 @register_policy_loss("actor")
 def compute_grpo_actor_loss_fn(**kwargs) -> tuple[torch.Tensor, dict]:
     """

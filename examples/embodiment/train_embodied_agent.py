@@ -58,6 +58,11 @@ def main(cfg) -> None:
         from rlinf.workers.actor.fsdp_nft_policy_worker import EmbodiedNFTFSDPPolicy
 
         actor_worker_cls = EmbodiedNFTFSDPPolicy
+    elif cfg.algorithm.loss_type == "opd_flow_kl":
+        # Flow-OPD v2: per-step velocity-MSE KL reward (Flow-OPD Eq.10).
+        from rlinf.workers.actor.fsdp_opd_v2_actor_worker import EmbodiedOPDV2FSDPActor
+
+        actor_worker_cls = EmbodiedOPDV2FSDPActor
     elif cfg.algorithm.loss_type in ("opd_flow", "opd_flow_ppo", "opd_flow_reparam"):
         from rlinf.workers.actor.fsdp_opd_actor_worker import EmbodiedOPDFSDPActor
 
